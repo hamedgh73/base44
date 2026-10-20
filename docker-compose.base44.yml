@@ -1,0 +1,108 @@
+# Base44 development stack for Raven Protect.
+#
+# Everything runs FROM THE CLONED SOURCE with live-reload dev servers — no
+# prebuilt application images — so edits in the repo show up in the preview.
+#   web  -> Vite dev server on host port 3000 (the preview entry point)
+#   api  -> Express + Postgres, reached from the browser through the Vite /api proxy
+#   db   -> plain Postgres service used only for local development
+name: raven-protect
+
+services:
+  db:
+    image: postgres:16-alpine
+    restart: on-failure
+    environment:
+      POSTGRES_USER: raven
+      POSTGRES_PASSWORD: raven_local_dev
+      POSTGRES_DB: ravenprotect
+    volumes:
+      - db_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U raven -d ravenprotect"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+
+  # One-shot schema + seed job. Runs after the database is healthy, then exits.
+  migrate:
+    image: node:22-alpine
+    working_dir: /app/api
+    command: ["sh", "-ec", "npm install --no-audit --no-fund && node scripts/migrate.mjs"]
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgres://raven:raven_local_dev@db:5432/ravenprotect
+    volumes:
+      - .:/app
+      - api_node_modules:/app/api/node_modules
+
+  api:
+    image: node:22-alpine
+    restart: on-failure
+    working_dir: /app/api
+    command: ["sh", "-ec", "npm install --no-audit --no-fund && exec npx nodemon --legacy-watch server/index.js"]
+    depends_on:
+      db:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    environment:
+      - DATABASE_URL=postgres://raven:raven_local_dev@db:5432/ravenprotect
+      - PORT=8000
+      - BASE44_PREVIEW_MODE
+    ports:
+      - "8000:8000"
+    volumes:
+      - .:/app
+      - api_node_modules:/app/api/node_modules
+    healthcheck:
+      # Probes the real catalog endpoint — no health-only route exists in the app.
+      test:
+        [
+          "CMD-SHELL",
+          "node -e \"fetch('http://127.0.0.1:8000/api/products').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))\"",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 40s
+
+  web:
+    image: node:22-alpine
+    restart: on-failure
+    working_dir: /app/web
+    command: ["sh", "-ec", "npm install --no-audit --no-fund && exec npx vite --host 0.0.0.0 --port 5173"]
+    depends_on:
+      api:
+        condition: service_started
+    environment:
+      # Bare pass-throughs: the platform supplies these, they are never hardcoded.
+      - BASE44_PREVIEW_MODE
+      - BASE44_SANDBOX_HOST_DOMAIN
+      - BASE44_PUBLIC_HOST_SUFFIX
+      - __VITE_ADDITIONAL_SERVER_ALLOWED_HOSTS
+      # Single-origin wiring: the browser only ever talks to port 3000, and the
+      # Vite dev server proxies /api to the container-network API.
+      - VITE_API_PROXY_TARGET=http://api:8000
+    ports:
+      - "3000:5173"
+    volumes:
+      - .:/app
+      - web_node_modules:/app/web/node_modules
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "node -e \"fetch('http://127.0.0.1:5173/').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))\"",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 40s
+
+volumes:
+  db_data:
+  api_node_modules:
+  web_node_modules:

@@ -1,0 +1,19 @@
+{
+  "name": "raven-protect-api",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "description": "Raven Protect lead-capture and client console API",
+  "scripts": {
+    "start": "node server/index.js",
+    "dev": "nodemon --legacy-watch server/index.js",
+    "migrate": "node scripts/migrate.mjs"
+  },
+  "dependencies": {
+    "express": "^4.21.2",
+    "pg": "^8.13.1"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.9"
+  }
+}
